@@ -1,98 +1,88 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-用户界面模块
+GUI主界面模块
 """
 
 import os
-import shutil
-import threading
-import time
+import sys
 import json
+import threading
+import shutil
+from datetime import datetime
+from collections import defaultdict
+
 from PyQt5.QtWidgets import (
-	QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-	QLabel, QFileDialog, QProgressBar, QListWidget, QListWidgetItem,
-	QSplitter, QGroupBox, QScrollArea, QMessageBox, QCheckBox, QTreeWidget, QTreeWidgetItem,
-	QSlider, QSpinBox, QMenu, QAction, QToolTip, QComboBox, QGridLayout, QSizePolicy, QDialog
+	QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+	QTreeWidget, QTreeWidgetItem, QLabel, QPushButton, QFileDialog,
+	QMessageBox, QSplitter, QScrollArea, QGridLayout, QSlider, QSpinBox, QProgressBar, QComboBox, QMenuBar, QMenu, QAction, QActionGroup
 )
-from PyQt5.QtGui import QPixmap, QImage, QMouseEvent
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont
+
 from app.scanner import FolderScanner
 from app.processor import FolderProcessor
 
 
 class ClickableImageLabel(QLabel):
-	"""支持双击的图片标签"""
-	double_clicked = pyqtSignal(str)  # 发射图片路径
+	"""可点击的图像标签"""
+	double_clicked = pyqtSignal(str)
 
-	def __init__(self, image_path, parent=None):
-		super().__init__(parent)
+	def __init__(self, image_path):
+		super().__init__()
 		self.image_path = image_path
-		self.setAlignment(Qt.AlignCenter)
-		self.setCursor(Qt.PointingHandCursor)
 
 	def mouseDoubleClickEvent(self, event):
 		"""双击事件"""
-		if event.button() == Qt.LeftButton:
-			self.double_clicked.emit(self.image_path)
-		super().mouseDoubleClickEvent(event)
+		self.double_clicked.emit(self.image_path)
 
 
-class ImageViewerDialog(QDialog):
-	"""图片查看器对话框"""
+class ImageViewerDialog(QMainWindow):
+	"""图像查看器对话框"""
 
 	def __init__(self, image_path, parent=None):
 		super().__init__(parent)
 		self.image_path = image_path
-		self.original_pixmap = None
-		self.current_scale = 1.0
-		self.init_ui()
+		self.setWindowTitle(f"图像查看 - {os.path.basename(image_path)}")
+		self.setGeometry(100, 100, 800, 600)
 
-	def init_ui(self):
-		self.setWindowTitle(os.path.basename(self.image_path))
-		self.setMinimumSize(800, 600)
+		# 中心部件
+		central_widget = QWidget()
+		layout = QVBoxLayout(central_widget)
 
-		layout = QVBoxLayout(self)
-		layout.setContentsMargins(0, 0, 0, 0)
-
-		# 滚动区域
-		scroll = QScrollArea()
-		scroll.setWidgetResizable(True)
-		scroll.setAlignment(Qt.AlignCenter)
-
-		# 图片标签
+		# 图像标签
 		self.image_label = QLabel()
 		self.image_label.setAlignment(Qt.AlignCenter)
-		scroll.setWidget(self.image_label)
+		layout.addWidget(self.image_label)
 
-		layout.addWidget(scroll)
-
-		# 加载图片
-		self.load_image()
-
-	def load_image(self):
-		"""加载图片"""
-		pixmap = QPixmap(self.image_path)
+		# 加载图像
+		pixmap = QPixmap(image_path)
 		if not pixmap.isNull():
-			self.original_pixmap = pixmap
-			self.scale_image()
-
-	def scale_image(self):
-		"""缩放图片以适应窗口"""
-		if self.original_pixmap:
-			# 计算缩放比例，让图片适应窗口但不超过原始大小
-			available_size = self.size() - QSize(40, 40)  # 留一些边距
-			scaled_pixmap = self.original_pixmap.scaled(
-				available_size,
+			# 缩放图像以适应窗口
+			scaled_pixmap = pixmap.scaled(
+				self.image_label.size(),
 				Qt.KeepAspectRatio,
 				Qt.SmoothTransformation
 			)
 			self.image_label.setPixmap(scaled_pixmap)
+		else:
+			self.image_label.setText("无法加载图像")
+
+		self.setCentralWidget(central_widget)
 
 	def resizeEvent(self, event):
 		"""窗口大小改变时重新缩放图片"""
-		self.scale_image()
 		super().resizeEvent(event)
+		if hasattr(self, 'image_label'):
+			pixmap = QPixmap(self.image_path)
+			if not pixmap.isNull():
+				scaled_pixmap = pixmap.scaled(
+					self.image_label.size(),
+					Qt.KeepAspectRatio,
+					Qt.SmoothTransformation
+				)
+				self.image_label.setPixmap(scaled_pixmap)
+
 
 class ScanThread(QThread):
 	"""扫描线程"""
@@ -137,6 +127,7 @@ class ScanThread(QThread):
 		self.progress_updated.emit(0, 100, "正在分组...")
 		groups, tag_groups = self.scanner.group_folders_by_name(
 			folders,
+			self.threshold,  # 传递阈值参数
 			lambda current, total, message: self.progress_updated.emit(current, total, message)
 		)
 
@@ -163,6 +154,7 @@ class ScanThread(QThread):
 		if self.scanner:
 			self.scanner.stop()
 
+
 class ContentCompareThread(QThread):
 	"""内容比对线程"""
 	progress_updated = pyqtSignal(int, int, str)
@@ -185,6 +177,7 @@ class ContentCompareThread(QThread):
 		if not self._stop_flag:
 			self.compare_completed.emit(self.group)
 
+
 class FolderSizeThread(QThread):
 	"""文件夹大小计算线程"""
 	size_calculated = pyqtSignal(dict, int, str)
@@ -197,6 +190,7 @@ class FolderSizeThread(QThread):
 		scanner = FolderScanner()
 		size, size_formatted = scanner.get_folder_size_async(self.folder_info)
 		self.size_calculated.emit(self.folder_info, size, size_formatted)
+
 
 class ImageLoadThread(QThread):
 	"""图片异步加载线程"""
@@ -227,383 +221,343 @@ class ImageLoadThread(QThread):
 				if 0 <= idx < len(self.image_paths):
 					self._pending_indices.append(idx)
 
-	@classmethod
-	def _trim_cache(cls):
-		"""裁剪缓存到最大大小"""
-		if len(cls._pixmap_cache) > cls._MAX_CACHE_SIZE:
-			keys_to_remove = list(cls._pixmap_cache.keys())[:len(cls._pixmap_cache) - cls._MAX_CACHE_SIZE]
-			for key in keys_to_remove:
-				del cls._pixmap_cache[key]
-
 	def run(self):
-		"""按需加载，从队列中获取并加载图片"""
+		"""运行加载线程"""
 		while not self._stop_flag:
-			idx = None
+			indices_to_load = []
 			with self._lock:
-				if self._pending_indices:
-					idx = self._pending_indices.pop(0)
+				indices_to_load = self._pending_indices[:]
+				self._pending_indices = []
 
-			if idx is not None:
+			if not indices_to_load:
+				QThread.msleep(50)
+				continue
+
+			for idx in indices_to_load:
+				if self._stop_flag:
+					break
+
+				image_path = self.image_paths[idx]
+				cache_key = f"{image_path}_{self.thumb_size}"
+
+				# 检查缓存
+				with self._cache_lock:
+					if cache_key in self._pixmap_cache:
+						pixmap = self._pixmap_cache[cache_key]
+						if not self._stop_flag:
+							self.image_loaded.emit(idx, pixmap, image_path)
+						continue
+
+				# 加载并缓存图片
 				try:
-					image_path = self.image_paths[idx]
-					cache_key = f"{image_path}_{self.thumb_size}"
+					image = QImage(image_path)
+					if image.isNull():
+						continue
 
-					# 先检查缓存
+					# 缩放图片
+					scaled_image = image.scaled(
+						self.thumb_size, self.thumb_size,
+						Qt.KeepAspectRatio, Qt.SmoothTransformation
+					)
+					pixmap = QPixmap.fromImage(scaled_image)
+
+					# 更新缓存
 					with self._cache_lock:
-						if cache_key in self._pixmap_cache:
-							self.image_loaded.emit(idx, self._pixmap_cache[cache_key], image_path)
-							continue
+						if len(self._pixmap_cache) >= self._MAX_CACHE_SIZE:
+							# 移除最旧的缓存项
+							oldest_key = next(iter(self._pixmap_cache))
+							self._pixmap_cache.pop(oldest_key)
+						self._pixmap_cache[cache_key] = pixmap
 
-					# 缓存未命中，加载图片
-					image = QImage()
-					if image.load(image_path):
-						pixmap = QPixmap.fromImage(image)
-						if not pixmap.isNull():
-							scaled_pixmap = pixmap.scaled(
-								self.thumb_size, self.thumb_size,
-								Qt.KeepAspectRatio,
-								Qt.FastTransformation
-							)
-							with self._cache_lock:
-								self._pixmap_cache[cache_key] = scaled_pixmap
-								self._trim_cache()
-							self.image_loaded.emit(idx, scaled_pixmap, image_path)
+					if not self._stop_flag:
+						self.image_loaded.emit(idx, pixmap, image_path)
 				except Exception as e:
-					print(f"加载图片失败: {e}")
-			else:
-				self.msleep(10)
+					print(f"加载图片失败 {image_path}: {e}")
 
-		self.all_loaded.emit()
+		if not self._stop_flag:
+			self.all_loaded.emit()
 
 	@classmethod
 	def clear_cache(cls):
-		"""清空图片缓存"""
+		"""清空缓存"""
 		with cls._cache_lock:
 			cls._pixmap_cache.clear()
 
+
 class MainWindow(QMainWindow):
-	"""主窗口"""
+	"""主窗口类"""
 
 	def __init__(self):
 		super().__init__()
+		self.init_ui()
+
+	def _create_menu_bar(self):
+		"""创建菜单栏"""
+		menubar = self.menuBar()
+
+		# 相似度阈值菜单
+		threshold_menu = menubar.addMenu("相似度阈值")
+		threshold_group = QActionGroup(self)
+		self.threshold_actions = {}
+		for threshold in [50, 60, 70, 80, 90, 95]:
+			action = QAction(f"{threshold}%", self)
+			action.setCheckable(True)
+			action.triggered.connect(lambda checked, t=threshold: self._on_threshold_menu(t))
+			threshold_group.addAction(action)
+			threshold_menu.addAction(action)
+			self.threshold_actions[threshold] = action
+
+		# 缩略图大小菜单
+		thumbnail_menu = menubar.addMenu("缩略图大小")
+		thumbnail_group = QActionGroup(self)
+		self.thumbnail_actions = {}
+		size_map = {"特大": 300, "大": 200, "中": 150, "小": 100}
+		for name, size in size_map.items():
+			action = QAction(name, self)
+			action.setCheckable(True)
+			action.triggered.connect(lambda checked, s=size, n=name: self._on_thumbnail_menu(s))
+			thumbnail_group.addAction(action)
+			thumbnail_menu.addAction(action)
+			self.thumbnail_actions[size] = action
+
+		# 分类方式菜单
+		view_mode_menu = menubar.addMenu("分类方式")
+		view_mode_group = QActionGroup(self)
+		self.view_mode_actions = {}
+		action_name = QAction("按名称", self)
+		action_name.setCheckable(True)
+		action_name.triggered.connect(lambda: self._on_view_mode_menu('name'))
+		view_mode_group.addAction(action_name)
+		view_mode_menu.addAction(action_name)
+		self.view_mode_actions['name'] = action_name
+
+		action_tag = QAction("按标签", self)
+		action_tag.setCheckable(True)
+		action_tag.triggered.connect(lambda: self._on_view_mode_menu('tag'))
+		view_mode_group.addAction(action_tag)
+		view_mode_menu.addAction(action_tag)
+		self.view_mode_actions['tag'] = action_tag
+
+	def init_ui(self):
+		"""初始化UI"""
+		# 设置窗口标题和大小
 		self.setWindowTitle("Eh下载文件查重")
 		self.setGeometry(100, 100, 1200, 800)
-		self.setMinimumSize(800, 600)
 
-		# 配置文件路径
-		self.config_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
+		# 创建菜单栏
+		self._create_menu_bar()
 
-		# 加载配置
-		self.config = self._load_config()
+		# 主布局
+		main_widget = QWidget()
+		main_layout = QVBoxLayout(main_widget)
+		main_layout.setContentsMargins(5, 5, 5, 5)  # 减小边距
+		main_layout.setSpacing(5)  # 减小间距
 
+		# 顶部工具栏
+		top_layout = QHBoxLayout()
+
+		# 左侧按钮
+		left_layout = QHBoxLayout()
+
+		# 选择文件夹按钮
+		select_folder_btn = QPushButton("选择文件夹")
+		select_folder_btn.clicked.connect(self.select_folder)
+		left_layout.addWidget(select_folder_btn)
+
+		# 扫描按钮
+		scan_btn = QPushButton("开始扫描")
+		scan_btn.clicked.connect(self.start_scan)
+		left_layout.addWidget(scan_btn)
+
+		# 暂停按钮
+		pause_btn = QPushButton("暂停")
+		pause_btn.setEnabled(False)
+		pause_btn.clicked.connect(self.toggle_pause)
+		left_layout.addWidget(pause_btn)
+
+		# 停止按钮
+		stop_btn = QPushButton("停止")
+		stop_btn.setEnabled(False)
+		stop_btn.clicked.connect(self.stop_scan)
+		left_layout.addWidget(stop_btn)
+
+		# 右侧按钮
+		right_layout = QHBoxLayout()
+		right_layout.setSpacing(10)
+
+		# 隐藏/显示预览按钮
+		hide_preview_btn = QPushButton("隐藏")
+		hide_preview_btn.clicked.connect(self.toggle_preview)
+		right_layout.addWidget(hide_preview_btn)
+
+		# 内容比对按钮
+		compare_content_btn = QPushButton("内容比对")
+		compare_content_btn.clicked.connect(self.start_content_compare)
+		right_layout.addWidget(compare_content_btn)
+
+		# 删除文件夹按钮
+		delete_folder_btn = QPushButton("删除文件夹")
+		delete_folder_btn.clicked.connect(self.delete_selected_folder)
+		right_layout.addWidget(delete_folder_btn)
+
+		# 组装顶部布局
+		top_layout.addLayout(left_layout)
+		top_layout.addStretch()  # 添加弹性空间
+		top_layout.addLayout(right_layout)
+
+		main_layout.addLayout(top_layout)
+
+		# 进度条
+		progress_bar = QProgressBar()
+		progress_bar.setValue(0)
+		progress_bar.setMaximumHeight(20)  # 限制高度
+		main_layout.addWidget(progress_bar)
+
+		# 状态信息和文件夹计数（同一行）
+		status_layout = QHBoxLayout()
+		status_layout.setSpacing(10)
+
+		progress_label = QLabel("就绪")
+		progress_label.setMinimumWidth(200)
+		status_layout.addWidget(progress_label)
+
+		status_layout.addStretch()  # 添加弹性空间
+
+		folder_count_label = QLabel("文件夹: 0")
+		folder_count_label.setMinimumWidth(150)
+		status_layout.addWidget(folder_count_label)
+
+		main_layout.addLayout(status_layout)
+
+		# 中央分割器
+		splitter = QSplitter(Qt.Horizontal)
+
+		# 左侧树形列表
+		group_tree = QTreeWidget()
+		group_tree.setHeaderLabel("文件夹组")
+		group_tree.itemClicked.connect(self.on_tree_item_clicked)
+		splitter.addWidget(group_tree)
+
+		# 右侧信息和预览
+		right_widget = QWidget()
+		right_layout = QVBoxLayout(right_widget)
+
+		# 文件夹名称（截断处理）
+		folder_name_label = QLabel("未选择文件夹")
+		folder_name_label.setAlignment(Qt.AlignLeft)
+		folder_name_label.setFont(QFont("Arial", 12, QFont.Bold))
+		folder_name_label.setWordWrap(False)
+		right_layout.addWidget(folder_name_label)
+
+		# 详细信息行（包含图像信息和相似度）
+		detail_layout = QHBoxLayout()
+		detail_layout.setSpacing(15)
+
+		folder_info_label = QLabel("图像: 0 | 大小: - | 修改: -")
+		detail_layout.addWidget(folder_info_label)
+
+		detail_layout.addStretch()
+
+		# 名称和内容相似度（靠窗口右侧）
+		name_similarity_label = QLabel("名称: -")
+		detail_layout.addWidget(name_similarity_label)
+
+		content_similarity_label = QLabel("内容: -")
+		detail_layout.addWidget(content_similarity_label)
+
+		right_layout.addLayout(detail_layout)
+
+		# 预览区域容器（使用堆叠布局）
+		preview_container = QWidget()
+		preview_container_layout = QVBoxLayout(preview_container)
+		preview_container_layout.setContentsMargins(0, 0, 0, 0)
+		preview_container_layout.setSpacing(0)
+
+		# 预览滚动区域
+		preview_scroll = QScrollArea()
+		preview_scroll.setWidgetResizable(True)
+
+		preview_widget = QWidget()
+		preview_grid_layout = QGridLayout(preview_widget)
+		preview_grid_layout.setSpacing(5)
+		preview_scroll.setWidget(preview_widget)
+
+		preview_container_layout.addWidget(preview_scroll)
+
+		# 遮罩标签（初始隐藏，作为独立窗口覆盖在预览区上）
+		preview_mask = QLabel("预览已隐藏")
+		preview_mask.setAlignment(Qt.AlignCenter)
+		preview_mask.setStyleSheet("background-color: #808080; color: #333; font-size: 16px;")
+		preview_mask.setVisible(False)
+		preview_mask.setParent(preview_scroll.viewport())
+
+		right_layout.addWidget(preview_container)
+
+		splitter.addWidget(right_widget)
+		splitter.setSizes([400, 800])
+
+		main_layout.addWidget(splitter, 1)  # 设置拉伸因子为1，使分割器占据大部分空间
+
+		# 存储引用
+		self.scan_btn = scan_btn
+		self.pause_btn = pause_btn
+		self.stop_btn = stop_btn
+		self.hide_preview_btn = hide_preview_btn
+		self.compare_content_btn = compare_content_btn
+		self.delete_folder_btn = delete_folder_btn
+		self.progress_bar = progress_bar
+		self.progress_label = progress_label
+		self.folder_count_label = folder_count_label
+		self.group_tree = group_tree
+		self.folder_name_label = folder_name_label
+		self.folder_info_label = folder_info_label
+		self.name_similarity_label = name_similarity_label
+		self.content_similarity_label = content_similarity_label
+		self.preview_scroll = preview_scroll
+		self.preview_grid_layout = preview_grid_layout
+		self.preview_mask = preview_mask
+		self.preview_container = preview_container
+
+		# 其他变量
 		self.selected_folder = None
-		self.folders = []
 		self.similar_groups = []
 		self.tag_groups = {}
 		self.current_group = None
 		self.current_folder = None
-		self.current_view_mode = self.config.get('view_mode', 'name')  # 'name' 或 'tag'
+		self.current_view_mode = 'name'
+		self.current_thumb_size = 150
+		self.threshold = 70  # 整数值，表示百分比
+		self.thumbnail_size = 150
+		self.image_labels = {}
+		self.image_containers = {}
+		self.scan_thread = None
+		self.content_compare_thread = None
+		self.image_load_thread = None
+		self.size_thread = None
 
-		# 滚动延迟加载相关
+		# 定时器
+		self.refresh_timer = QTimer()
+		self.refresh_timer.timeout.connect(self._on_refresh_timer)
+
 		self.scroll_timer = QTimer()
 		self.scroll_timer.setSingleShot(True)
 		self.scroll_timer.timeout.connect(self._on_scroll_timer_timeout)
 
-		# 窗口大小改变相关
 		self._resize_timer = QTimer()
 		self._resize_timer.setSingleShot(True)
 		self._resize_timer.timeout.connect(self._on_resize_timeout)
 
-		central_widget = QWidget()
-		main_layout = QVBoxLayout(central_widget)
-		main_layout.setSpacing(5)
-		main_layout.setContentsMargins(5, 5, 5, 5)
-
-		# 控制区域 - 合并为一行
-		control_layout = QHBoxLayout()
-
-		self.select_folder_btn = QPushButton("选择文件夹")
-		self.select_folder_btn.setToolTip("选择要扫描的根目录")
-
-		self.scan_btn = QPushButton("开始扫描")
-		self.scan_btn.setToolTip("开始扫描并分类文件夹")
-		self.pause_btn = QPushButton("暂停")
-		self.pause_btn.setToolTip("暂停/继续扫描")
-		self.stop_btn = QPushButton("停止")
-		self.stop_btn.setToolTip("停止当前扫描")
-
-		self.pause_btn.setEnabled(False)
-		self.stop_btn.setEnabled(False)
-
-		control_layout.addWidget(self.select_folder_btn)
-		control_layout.addWidget(self.scan_btn)
-		control_layout.addWidget(self.pause_btn)
-		control_layout.addWidget(self.stop_btn)
-		control_layout.addStretch()
-
-		main_layout.addLayout(control_layout)
-
-		# 进度区域 - 分两行
-		progress_container = QVBoxLayout()
-		progress_container.setSpacing(2)
-
-		# 第一行：进度条
-		self.progress_bar = QProgressBar()
-		self.progress_bar.setFixedHeight(20)
-		self.progress_bar.setTextVisible(False)
-		progress_container.addWidget(self.progress_bar)
-
-		# 第二行：状态信息和文件夹计数
-		status_layout = QHBoxLayout()
-		self.progress_label = QLabel("准备就绪")
-		self.progress_label.setMinimumWidth(600)  # 增加宽度以显示更长的文件夹名
-		self.folder_count_label = QLabel("文件夹: 0")
-		status_layout.addWidget(self.progress_label)
-		status_layout.addStretch()
-		status_layout.addWidget(self.folder_count_label)
-		progress_container.addLayout(status_layout)
-
-		main_layout.addLayout(progress_container)
-
-		# 分割器 - 主要区域
-		splitter = QSplitter(Qt.Horizontal)
-		splitter.setCollapsible(0, False)  # 左侧栏不可折叠
-		splitter.setStretchFactor(0, 0)     # 左侧栏不拉伸
-		splitter.setStretchFactor(1, 1)     # 右侧栏拉伸填充
-
-		# 左侧树形列表
-		self.group_tree = QTreeWidget()
-		self.group_tree.setHeaderLabel("文件夹分组")
-		self.group_tree.setMinimumWidth(200)
-		self.group_tree.setMaximumWidth(350)
-		self.group_tree.setToolTip("双击展开/折叠\n点击查看详情")
-		splitter.addWidget(self.group_tree)
-
-		# 右侧面板
-		right_widget = QWidget()
-		right_layout = QVBoxLayout(right_widget)
-		right_layout.setSpacing(5)
-
-		# 当前文件夹信息 - 分两行显示
-		info_container = QWidget()
-		info_container_layout = QVBoxLayout(info_container)
-		info_container_layout.setSpacing(2)
-		info_container_layout.setContentsMargins(0, 0, 0, 0)
-
-		# 第一行：文件夹名称和图片总数
-		name_row_layout = QHBoxLayout()
-		self.folder_name_label = QLabel("未选择文件夹")
-		self.folder_name_label.setWordWrap(False)
-		self.folder_name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-		self.folder_name_label.setToolTip("点击查看完整名称")
-		self.image_count_label = QLabel("共 0 张图片")
-		self.image_count_label.setStyleSheet("color: #666;")
-		name_row_layout.addWidget(self.folder_name_label)
-		name_row_layout.addStretch()
-		name_row_layout.addWidget(self.image_count_label)
-		info_container_layout.addLayout(name_row_layout)
-
-		# 第二行：文件夹信息和按钮
-		info_row_layout = QHBoxLayout()
-		self.folder_info_label = QLabel("图像: 0 | 大小: - | 修改: -")
-		self.name_similarity_label = QLabel("名称相似度: -")
-		self.content_similarity_label = QLabel("内容相似度: -")
-		self.compare_content_btn = QPushButton("内容比对")
-		self.compare_content_btn.setToolTip("对选中的相似组进行图片内容比对")
-		self.delete_btn = QPushButton("删除")
-		self.delete_btn.setToolTip("删除选中的文件夹")
-
-		info_row_layout.addWidget(self.folder_info_label)
-		info_row_layout.addWidget(self.name_similarity_label)
-		info_row_layout.addWidget(self.content_similarity_label)
-		info_row_layout.addWidget(self.compare_content_btn)
-		info_row_layout.addWidget(self.delete_btn)
-		info_container_layout.addLayout(info_row_layout)
-
-		right_layout.addWidget(info_container)
-
-		# 图像预览 - 主要区域（使用网格布局）
-		self.preview_group = QGroupBox("图像预览")
-		preview_outer_layout = QVBoxLayout()
-
-		# 预览控制栏
-		preview_control_layout = QHBoxLayout()
-		self.hide_preview_btn = QPushButton("隐藏")
-		self.hide_preview_btn.setToolTip("隐藏图片缩略图")
-		self.hide_preview_btn.clicked.connect(self.toggle_preview)
-		preview_control_layout.addWidget(self.hide_preview_btn)
-		preview_control_layout.addStretch()
-		preview_outer_layout.addLayout(preview_control_layout)
-
-		self.preview_scroll = QScrollArea()
-		self.preview_scroll.setWidgetResizable(True)
-		self.preview_content = QWidget()
-		self.preview_grid_layout = QGridLayout(self.preview_content)
-		self.preview_grid_layout.setSpacing(10)
-		self.preview_grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-		self.preview_scroll.setWidget(self.preview_content)
-		# 监听滚动事件
-		self.preview_scroll.verticalScrollBar().valueChanged.connect(self.on_preview_scroll)
-		preview_outer_layout.addWidget(self.preview_scroll)
-		self.preview_group.setLayout(preview_outer_layout)
-		right_layout.addWidget(self.preview_group, 1)
-
-		# 移除未使用的分批加载定时器
-
-		splitter.addWidget(right_widget)
-		splitter.setSizes([250, 950])
-		main_layout.addWidget(splitter, 1)
-
-		self.setCentralWidget(central_widget)
-
-		# 添加菜单栏
-		self._create_menu_bar()
-
 		# 连接信号
-		self.select_folder_btn.clicked.connect(self.select_folder)
-		self.scan_btn.clicked.connect(self.start_scan)
-		self.pause_btn.clicked.connect(self.toggle_pause)
-		self.stop_btn.clicked.connect(self.stop_scan)
-		self.group_tree.itemClicked.connect(self.on_tree_item_clicked)
-		self.compare_content_btn.clicked.connect(self.start_content_compare)
-		self.delete_btn.clicked.connect(self.delete_selected_folder)
+		preview_scroll.verticalScrollBar().valueChanged.connect(self.on_preview_scroll)
+
+		# 配置文件
+		self.config_file = os.path.join(os.path.dirname(__file__), 'config.json')
+		self._load_config()
+
+		# 设置中央部件
+		self.setCentralWidget(main_widget)
 
 
-		self.scan_thread = None
-		self.content_compare_thread = None
-
-		# 定时器用于定期刷新UI
-		self.refresh_timer = QTimer()
-		self.refresh_timer.timeout.connect(self._on_refresh_timer)
-
-	def _create_menu_bar(self):
-		"""创建菜单栏"""
-		menu_bar = self.menuBar()
-
-		# 分类方式菜单
-		view_mode_menu = menu_bar.addMenu("分类方式")
-
-		# 存储当前选中的动作
-		self.current_view_mode_action = None
-
-		view_modes = [
-			("按名称相似", "name"),
-			("按标签分组", "tag")
-		]
-
-		for mode_name, mode_value in view_modes:
-			action = QAction(mode_name, self)
-			action.setCheckable(True)
-			if mode_value == self.current_view_mode:
-				action.setChecked(True)
-				self.current_view_mode_action = action
-			action.triggered.connect(lambda checked, m=mode_value, a=action: self._set_view_mode(m, a))
-			view_mode_menu.addAction(action)
-
-		# 缩略图大小菜单
-		thumb_size_menu = menu_bar.addMenu("缩略图大小")
-
-		# 存储当前选中的动作
-		self.current_thumb_size_action = None
-
-		thumb_sizes = [
-			("小", 100),
-			("中", 150),
-			("大", 200),
-			("超大", 300)
-		]
-
-		for size_name, size_value in thumb_sizes:
-			action = QAction(size_name, self)
-			action.setCheckable(True)
-			if size_value == self.thumbnail_size:
-				action.setChecked(True)
-				self.current_thumb_size_action = action
-			action.triggered.connect(lambda checked, s=size_value, a=action: self._set_thumbnail_size(s, a))
-			thumb_size_menu.addAction(action)
-
-		# 相似度阈值菜单
-		threshold_menu = menu_bar.addMenu("相似度阈值")
-
-		# 存储当前选中的动作
-		self.current_threshold_action = None
-
-		thresholds = [
-			("50%", 50),
-			("60%", 60),
-			("70%", 70),
-			("80%", 80),
-			("90%", 90)
-		]
-
-		for threshold_name, threshold_value in thresholds:
-			action = QAction(threshold_name, self)
-			action.setCheckable(True)
-			if threshold_value == self.threshold:
-				action.setChecked(True)
-				self.current_threshold_action = action
-			action.triggered.connect(lambda checked, t=threshold_value, a=action: self._set_threshold(t, a))
-			threshold_menu.addAction(action)
-
-	def _set_view_mode(self, mode, action):
-		"""设置视图模式"""
-		# 如果点击的是当前已选中的选项，保持选中状态
-		if action == self.current_view_mode_action:
-			action.setChecked(True)
-			return
-
-		# 取消之前选中的动作
-		if self.current_view_mode_action:
-			self.current_view_mode_action.setChecked(False)
-
-		# 设置新的选中动作
-		self.current_view_mode_action = action
-		action.setChecked(True)
-
-		# 更新值
-		self.current_view_mode = mode
-		self._save_config()
-		self.refresh_tree_view()
-
-	def _set_thumbnail_size(self, size, action):
-		"""设置缩略图大小"""
-		# 如果点击的是当前已选中的选项，保持选中状态
-		if action == self.current_thumb_size_action:
-			action.setChecked(True)
-			return
-
-		# 取消之前选中的动作
-		if self.current_thumb_size_action:
-			self.current_thumb_size_action.setChecked(False)
-
-		# 设置新的选中动作
-		self.current_thumb_size_action = action
-		action.setChecked(True)
-
-		# 更新值
-		self.thumbnail_size = size
-		self._save_config()
-		if self.current_folder:
-			self.show_folder_preview(self.current_folder)
-
-	def _set_threshold(self, threshold, action):
-		"""设置相似度阈值"""
-		# 如果点击的是当前已选中的选项，保持选中状态
-		if action == self.current_threshold_action:
-			action.setChecked(True)
-			return
-
-		# 取消之前选中的动作
-		if self.current_threshold_action:
-			self.current_threshold_action.setChecked(False)
-
-		# 设置新的选中动作
-		self.current_threshold_action = action
-		action.setChecked(True)
-
-		# 更新值
-		self.threshold = threshold
-		self._save_config()
 
 	def _load_config(self):
 		"""加载配置文件"""
@@ -615,6 +569,10 @@ class MainWindow(QMainWindow):
 					self.threshold = config.get('threshold', 70)
 					# 加载缩略图大小
 					self.thumbnail_size = config.get('thumbnail_size', 150)
+					# 加载分类方式
+					self.current_view_mode = config.get('view_mode', 'name')
+					# 更新菜单选中状态
+					self._update_menu_selections()
 					return config
 		except Exception as e:
 			print(f"加载配置文件失败: {e}")
@@ -628,13 +586,19 @@ class MainWindow(QMainWindow):
 		self.threshold = default_config['threshold']
 		# 设置默认缩略图大小
 		self.thumbnail_size = default_config['thumbnail_size']
+		# 设置默认分类方式
+		self.current_view_mode = default_config['view_mode']
+		# 更新菜单选中状态
+		self._update_menu_selections()
 		return default_config
+
+
 
 	def _save_config(self):
 		"""保存配置文件"""
 		try:
 			config = {
-				'threshold': self.threshold,
+				'threshold': int(self.threshold),
 				'view_mode': self.current_view_mode,
 				'thumbnail_size': self.thumbnail_size
 			}
@@ -643,10 +607,28 @@ class MainWindow(QMainWindow):
 		except Exception as e:
 			print(f"保存配置文件失败: {e}")
 
+	def _update_menu_selections(self):
+		"""更新菜单选中状态"""
+		# 更新阈值菜单
+		if self.threshold in self.threshold_actions:
+			self.threshold_actions[self.threshold].setChecked(True)
+
+		# 更新缩略图大小菜单
+		if self.thumbnail_size in self.thumbnail_actions:
+			self.thumbnail_actions[self.thumbnail_size].setChecked(True)
+
+		# 更新分类方式菜单
+		if self.current_view_mode in self.view_mode_actions:
+			self.view_mode_actions[self.current_view_mode].setChecked(True)
+
+	def _truncate_text(self, text, max_length=50):
+		"""截断长文本"""
+		if len(text) > max_length:
+			return text[:max_length-3] + "..."
+		return text
+
 	def select_folder(self):
 		"""选择文件夹"""
-		import time
-		start_time = time.time()
 		folder = QFileDialog.getExistingDirectory(self, "选择扫描目录")
 		if folder:
 			self.selected_folder = folder
@@ -656,25 +638,27 @@ class MainWindow(QMainWindow):
 			print("取消选择文件夹")
 
 	def toggle_preview(self):
-		"""切换预览显示/隐藏"""
-		import time
-		start_time = time.time()
-		current_state = self.preview_scroll.isVisible()
-		self.preview_scroll.setVisible(not current_state)
-		if self.preview_scroll.isVisible():
+		"""切换预览显示/隐藏（使用遮罩）"""
+		if self.preview_mask.isVisible():
+			# 显示预览（隐藏遮罩）
+			self.preview_mask.setVisible(False)
 			self.hide_preview_btn.setText("隐藏")
 		else:
+			# 隐藏预览（显示遮罩）
+			# 调整遮罩大小和位置以覆盖预览区
+			self.preview_mask.resize(self.preview_scroll.viewport().size())
+			self.preview_mask.move(0, 0)
+			self.preview_mask.setVisible(True)
 			self.hide_preview_btn.setText("显示")
 
 	def start_scan(self):
 		"""开始扫描"""
-		import time
-		start_time = time.time()
 		if not hasattr(self, 'selected_folder') or not self.selected_folder:
 			QMessageBox.warning(self, "警告", "请先选择扫描目录")
 			return
 		folder = self.selected_folder
 
+		# 将阈值转换为0-1之间的值
 		threshold = self.threshold / 100.0
 
 		self.scan_btn.setEnabled(False)
@@ -695,8 +679,6 @@ class MainWindow(QMainWindow):
 
 	def toggle_pause(self):
 		"""切换暂停/继续"""
-		import time
-		start_time = time.time()
 		if self.scan_thread:
 			if self.pause_btn.text() == "暂停":
 				self.scan_thread.pause()
@@ -709,8 +691,6 @@ class MainWindow(QMainWindow):
 
 	def stop_scan(self):
 		"""停止扫描"""
-		import time
-		start_time = time.time()
 		if self.scan_thread:
 			self.scan_thread.stop()
 			self.progress_label.setText("停止中...")
@@ -720,18 +700,14 @@ class MainWindow(QMainWindow):
 
 	def update_progress(self, current, total, message):
 		"""更新进度"""
-		import time
-		start_time = time.time()
 		if total > 0:
 			self.progress_bar.setValue(int(current / total * 100))
-		# 截断长消息
-		if len(message) > 50:
-			message = message[:47] + '...'
+		# 显示扫描状态和文件夹名称
 		self.progress_label.setText(message)
 
 	def _on_refresh_timer(self):
 		"""定时刷新UI"""
-		if self.scan_thread and self.scan_thread.groups:
+		if self.scan_thread and hasattr(self.scan_thread, 'groups') and self.scan_thread.groups:
 			self.similar_groups = self.scan_thread.groups
 			self._refresh_tree_view_fast()
 
@@ -904,8 +880,8 @@ class MainWindow(QMainWindow):
 			self.current_folder = data[1]
 			self.current_group = data[2]
 
-			self.folder_name_label.setText(self.current_folder['name'])
-			info_text = f"图像: {len(self.current_folder['images'])}"
+			self.folder_name_label.setText(self._truncate_text(self.current_folder['name']))
+			info_text = f"图像: {len(self.current_folder['images']) if 'images' in self.current_folder else 0}"
 			if 'size_formatted' in self.current_folder and self.current_folder['size_formatted'] != '-':
 				info_text += f" | 大小: {self.current_folder['size_formatted']}"
 			else:
@@ -914,8 +890,8 @@ class MainWindow(QMainWindow):
 				self.size_thread = FolderSizeThread(self.current_folder)
 				self.size_thread.size_calculated.connect(self.on_folder_size_calculated)
 				self.size_thread.start()
-			if 'mtime' in self.current_folder:
-				info_text += f" | 修改: {self.current_folder['mtime']}"
+			if 'modified_time' in self.current_folder:
+				info_text += f" | 修改: {self.current_folder['modified_time']}"
 			self.folder_info_label.setText(info_text)
 
 			if self.current_group:
@@ -926,8 +902,8 @@ class MainWindow(QMainWindow):
 				else:
 					self.content_similarity_label.setText("内容: 未比对")
 			else:
-				self.name_similarity_label.setText("名称相似度: -")
-				self.content_similarity_label.setText("内容相似度: -")
+				self.name_similarity_label.setText("名称: -")
+				self.content_similarity_label.setText("内容: -")
 
 			self.show_folder_preview(self.current_folder)
 
@@ -938,10 +914,10 @@ class MainWindow(QMainWindow):
 
 		# 更新当前显示
 		if self.current_folder == folder_info:
-			info_text = f"图像: {len(self.current_folder['images'])}"
+			info_text = f"图像: {len(self.current_folder['images']) if 'images' in self.current_folder else 0}"
 			info_text += f" | 大小: {size_formatted}"
-			if 'mtime' in self.current_folder:
-				info_text += f" | 修改: {self.current_folder['mtime']}"
+			if 'modified_time' in self.current_folder:
+				info_text += f" | 修改: {self.current_folder['modified_time']}"
 			self.folder_info_label.setText(info_text)
 
 	def clear_preview(self):
@@ -1001,18 +977,15 @@ class MainWindow(QMainWindow):
 		"""显示文件夹预览"""
 		self.clear_preview()
 
-		if not folder['images']:
+		if not folder.get('images'):
 			scanner = FolderScanner()
 			folder['images'] = scanner.get_folder_images(folder['path'])
 			info_text = f"图像: {len(folder['images'])}"
 			if 'size_formatted' in folder:
 				info_text += f" | 大小: {folder['size_formatted']}"
-			if 'mtime' in folder:
-				info_text += f" | 修改: {folder['mtime']}"
+			if 'modified_time' in folder:
+				info_text += f" | 修改: {folder['modified_time']}"
 			self.folder_info_label.setText(info_text)
-
-		# 更新图片计数
-		self.image_count_label.setText(f"共 {len(folder['images'])} 张图片")
 
 		# 获取缩略图大小
 		thumb_size = self.thumbnail_size
@@ -1105,8 +1078,6 @@ class MainWindow(QMainWindow):
 
 	def start_content_compare(self):
 		"""开始内容比对"""
-		import time
-		start_time = time.time()
 		if not self.current_group:
 			QMessageBox.warning(self, "警告", "请先选择一个文件夹组")
 			return
@@ -1128,8 +1099,6 @@ class MainWindow(QMainWindow):
 
 	def on_content_compare_completed(self, group):
 		"""内容比对完成"""
-		import time
-		start_time = time.time()
 		self.compare_content_btn.setEnabled(True)
 		self.pause_btn.setEnabled(False)
 		self.stop_btn.setEnabled(False)
@@ -1142,8 +1111,6 @@ class MainWindow(QMainWindow):
 
 	def delete_selected_folder(self):
 		"""删除选中的文件夹"""
-		import time
-		start_time = time.time()
 		if not self.current_folder:
 			QMessageBox.warning(self, "警告", "请先选择要删除的文件夹")
 			return
@@ -1189,6 +1156,9 @@ class MainWindow(QMainWindow):
 			self.show_folder_preview(self.current_folder)
 			# 尝试恢复滚动位置
 			self.preview_scroll.verticalScrollBar().setValue(scroll_value)
+		# 如果遮罩可见，更新遮罩大小
+		if hasattr(self, 'preview_mask') and self.preview_mask.isVisible():
+			self.preview_mask.resize(self.preview_scroll.viewport().size())
 
 	def closeEvent(self, event):
 		"""窗口关闭时清理资源"""
@@ -1206,3 +1176,20 @@ class MainWindow(QMainWindow):
 		ImageLoadThread.clear_cache()
 
 		event.accept()
+
+	def _on_threshold_menu(self, threshold):
+		"""阈值菜单选择事件"""
+		self.threshold = threshold
+		self._save_config()
+
+	def _on_thumbnail_menu(self, size):
+		"""缩略图大小菜单选择事件"""
+		self.thumbnail_size = size
+		self._save_config()
+		if self.current_folder:
+			self.show_folder_preview(self.current_folder)
+
+	def _on_view_mode_menu(self, mode):
+		"""分类方式菜单选择事件"""
+		self.current_view_mode = mode
+		self.refresh_tree_view()

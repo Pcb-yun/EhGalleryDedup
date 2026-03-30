@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 from multiprocessing import cpu_count, Manager
 from collections import defaultdict
 
+from app.similarity import ImageSimilarity
+
 
 class FolderScanner:
 	"""文件夹扫描器类"""
@@ -24,6 +26,8 @@ class FolderScanner:
 		self._stopped = False
 		# 线程数 - IO密集型使用更多线程
 		self.max_workers = min(64, cpu_count() * 8)
+		# 相似度计算对象
+		self.similarity = ImageSimilarity()
 
 	def pause(self):
 		"""暂停扫描"""
@@ -183,11 +187,12 @@ class FolderScanner:
 		except Exception as e:
 			return None
 
-	def group_folders_by_name(self, folders, progress_callback=None):
-		"""按名称对文件夹进行分组（多进程加速）
+	def group_folders_by_name(self, folders, threshold=0.7, progress_callback=None):
+		"""按名称相似度对文件夹进行分组（支持阈值）
 
 		Args:
 			folders: list, 文件夹列表
+			threshold: float, 相似度阈值 (0-1)
 			progress_callback: function, 进度回调函数
 
 		Returns:
@@ -200,43 +205,86 @@ class FolderScanner:
 		if progress_callback:
 			progress_callback(0, total, "开始分组...")
 
-		# 使用字典进行快速分组
-		name_groups = defaultdict(list)
-		for i, folder in enumerate(folders):
+		# 按名称相似度分组
+		groups = []
+		processed = set()
+
+		for i, folder1 in enumerate(folders):
 			if self._stopped:
 				break
 
 			while self._paused and not self._stopped:
 				time.sleep(0.05)
 
-			name = folder['content_name']
-			name_groups[name].append(folder)
+			if i in processed:
+				continue
 
-			if progress_callback and i % 100 == 0:
+			# 找到所有与当前文件夹相似的文件夹
+			similar_folders = [folder1]
+			processed.add(i)
+
+			for j, folder2 in enumerate(folders):
+				if self._stopped:
+					break
+
+				if j in processed or i == j:
+					continue
+
+				# 计算名称相似度
+				name_similarity = self.similarity.calculate_folders_name_similarity(folder1, folder2)
+				if name_similarity >= threshold:
+					similar_folders.append(folder2)
+					processed.add(j)
+
+			if similar_folders:
+				# 计算组内平均相似度
+				average_similarity = self._calculate_group_average_similarity(similar_folders)
+
+				group = {
+					'name': folder1['content_name'],
+					'folders': similar_folders,
+					'similarity': average_similarity,
+					'content_similarity': None
+				}
+				groups.append(group)
+
+			if progress_callback and i % 10 == 0:
 				progress_callback(i, total, f"分组进度: {i}/{total}")
 
 		if progress_callback:
 			progress_callback(total, total, "分组完成")
 
-		# 构建结果
-		groups = []
+		# 构建标签分组
 		tag_groups = defaultdict(list)
-
-		for name, folder_list in name_groups.items():
-			group = {
-				'name': name,
-				'folders': folder_list,
-				'similarity': 1.0,
-				'content_similarity': None
-			}
-			groups.append(group)
-
-			# 按标签分组
-			for folder in folder_list:
+		for group in groups:
+			for folder in group['folders']:
 				for tag in folder.get('tags', []):
 					tag_groups[tag].append(folder)
 
 		return groups, dict(tag_groups)
+
+	def _calculate_group_average_similarity(self, folders):
+		"""计算组内文件夹的平均相似度
+
+		Args:
+			folders: list, 文件夹列表
+
+		Returns:
+			float: 平均相似度
+		"""
+		if len(folders) < 2:
+			return 1.0
+
+		total_similarity = 0
+		count = 0
+
+		for i in range(len(folders)):
+			for j in range(i + 1, len(folders)):
+				similarity = self.similarity.calculate_folders_name_similarity(folders[i], folders[j])
+				total_similarity += similarity
+				count += 1
+
+		return total_similarity / count if count > 0 else 1.0
 
 	def get_folder_images(self, folder_path):
 		"""获取文件夹中的图像文件（按需调用）
