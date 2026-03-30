@@ -1,0 +1,7 @@
+Pillow
+numpy
+opencv-python
+PyQt5
+scikit-image
+scipy
+pyopencl
