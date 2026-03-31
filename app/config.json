@@ -1,5 +1,7 @@
 {
   "threshold": 70,
   "view_mode": "name",
-  "thumbnail_size": 100
+  "thumbnail_size": 100,
+  "auto_scan": true,
+  "sort_order": "desc"
 }
