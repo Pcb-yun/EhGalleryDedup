@@ -1,9 +1,6 @@
 # EhGalleryDedup
 
 **Eh画廊查重** - EhViewer下载画廊文件夹重复检测工具
-# EhGalleryDedup
-
-**Eh画廊查重** - EhViewer下载画廊文件夹重复检测工具
 
 ## 简介
 
