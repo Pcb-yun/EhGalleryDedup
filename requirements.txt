@@ -1,7 +1,7 @@
+# 基础依赖
 Pillow
 numpy
-opencv-python
 PyQt5
-scikit-image
-scipy
-pyopencl
+
+#可选依赖：用于回收站支持
+send2trash
