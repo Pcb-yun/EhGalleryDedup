@@ -89,7 +89,7 @@ class FolderScanner:
 		return ''
 
 	def _calculate_name_similarity_fast(self, name1, name2):
-		"""快速计算名称相似度
+		"""快速计算名称相似度（使用ImageSimilarity的优化方法）
 
 		Args:
 			name1: 第一个名称
@@ -98,31 +98,7 @@ class FolderScanner:
 		Returns:
 			float: 相似度 (0-1)
 		"""
-		if not name1 or not name2:
-			return 0.0
-		if name1 == name2:
-			return 1.0
-
-		len1, len2 = len(name1), len(name2)
-		if len1 == 0:
-			return 0.0 if len2 > 0 else 1.0
-		if len2 == 0:
-			return 0.0
-
-		# 优化：只保留两行
-		prev_row = list(range(len2 + 1))
-		for i, c1 in enumerate(name1):
-			curr_row = [i + 1]
-			for j, c2 in enumerate(name2):
-				insertions = prev_row[j + 1] + 1
-				deletions = curr_row[j] + 1
-				substitutions = prev_row[j] + (c1 != c2)
-				curr_row.append(min(insertions, deletions, substitutions))
-			prev_row = curr_row
-
-		distance = prev_row[-1]
-		max_len = max(len1, len2)
-		return 1.0 - (distance / max_len)
+		return self.similarity.calculate_name_similarity(name1, name2, use_jaro_winkler=True)
 
 	def _process_folder_entry(self, entry):
 		"""处理单个文件夹条目
